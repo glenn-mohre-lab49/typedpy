@@ -43,6 +43,29 @@ def make_signature(names, required, additional_properties, bases_params_by_name)
     return Signature(non_default_args + default_args + additional_args)
 
 
+def _make_init(signature):
+    params = signature.parameters
+    params_st_list = []
+    non_default_args = []
+    default_args = []
+    additional_prop = False
+    for name, param in params.items():
+        if param.kind == Parameter.POSITIONAL_OR_KEYWORD and param.default is not None:
+            params_st_list.append(name)
+            non_default_args.append(name)
+        elif param.kind == Parameter.POSITIONAL_OR_KEYWORD and param.default is None:
+            params_st_list.append(name + '=None')
+            default_args.append(name)
+        elif param.kind == Parameter.VAR_KEYWORD:
+            params_st_list.append('**' + name)
+            additional_prop = True
+    declaration_code = 'def __init__(self, %s):\n' % ', '.join(params_st_list)
+    non_default_assignments = ''.join(['    self.%s = %s\n' % (name, name) for name in non_default_args])
+    default_assignments = ''.join(['    if %s!=None:\n        self.%s = %s\n' % (name, name, name) for name in default_args])
+    other_assignments = '    for n,v in kwargs.items(): setattr(self, n, v) \n' if additional_prop else ''
+    return declaration_code + non_default_assignments + default_assignments + other_assignments
+
+
 def get_base_info(bases):
     """
     Extract the parameters from all the base classes to support inheritance of Structures.
@@ -123,12 +146,15 @@ class StructMeta(type):
         fields = [key for key, val in cls_dict.items() if isinstance(val, Field)]
         for field_name in fields:
             setattr(cls_dict[field_name], '_name', field_name)
-        clsobj = super().__new__(mcs, name, bases, dict(cls_dict))
-        clsobj._fields = fields
         default_required = list(set(bases_required + fields)) if bases_params else fields
         required = cls_dict.get('_required', default_required)
         additional_props = cls_dict.get('_additionalProperties', True)
-        sig = make_signature(clsobj._fields, required, additional_props, bases_params)
+        sig = make_signature(fields, required, additional_props, bases_params)
+        init_source = _make_init(sig)
+        print(init_source)
+        exec(init_source, globals(),cls_dict)
+        clsobj = super().__new__(mcs, name, bases, dict(cls_dict))
+        clsobj._fields = fields
         setattr(clsobj, '__signature__', sig)
         return clsobj
 
@@ -225,6 +251,10 @@ class TypedField(Field):
         if not isinstance(value, self._ty):
             raise TypeError("%s: Expected %s" % (self._name, self._ty))
         super().__set__(instance, value)
+
+    @classmethod
+    def get_input_type(cls):
+        return cls._ty
 
 
 class ClassReference(TypedField):
